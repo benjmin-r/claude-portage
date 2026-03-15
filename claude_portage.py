@@ -19,7 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # ---------------------------------------------------------------------------
 # Path encoding / decoding
@@ -622,6 +622,118 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Rename
+# ---------------------------------------------------------------------------
+
+def _rewrite_file_in_place(
+    path: Path, replacements: List[Tuple[str, str]]
+) -> bool:
+    """Rewrite a text file in place, applying path replacements.
+
+    Returns True if any changes were made.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return False
+
+    changed = False
+    new_lines = []
+    for line in lines:
+        new_line = rewrite_line(line, replacements)
+        if new_line != line:
+            changed = True
+        new_lines.append(new_line)
+
+    if changed:
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+
+    return changed
+
+
+def cmd_rename(args: argparse.Namespace) -> int:
+    """Rewrite Claude metadata after moving/renaming a project directory."""
+    old_dir = Path(args.old_path).expanduser().resolve()
+    new_dir = Path(args.new_path).expanduser().resolve()
+
+    if str(old_dir) == str(new_dir):
+        print("Error: old and new paths are the same", file=sys.stderr)
+        return 1
+
+    claude_dir = default_claude_dir()
+    old_encoded = encode_path(str(old_dir))
+    new_encoded = encode_path(str(new_dir))
+    old_meta = claude_dir / "projects" / old_encoded
+
+    if not old_meta.is_dir():
+        print(
+            f"Error: no Claude metadata found for {old_dir}\n"
+            f"  (looked for {old_meta})",
+            file=sys.stderr,
+        )
+        return 1
+
+    new_meta = claude_dir / "projects" / new_encoded
+    if new_meta.exists():
+        print(
+            f"Error: metadata already exists for target path\n"
+            f"  {new_meta}\n"
+            f"  Remove it first or choose a different target.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.verbose:
+        print(f"Old path:     {old_dir}")
+        print(f"New path:     {new_dir}")
+        print(f"Old encoded:  {old_encoded}")
+        print(f"New encoded:  {new_encoded}")
+
+    # Build replacement map (claude_dir stays the same)
+    replacements = build_replacement_map(
+        source_project_path=str(old_dir),
+        target_project_path=str(new_dir),
+        source_claude_dir=str(claude_dir),
+        target_claude_dir=str(claude_dir),
+    )
+
+    if args.verbose:
+        print(f"Replacements ({len(replacements)}):")
+        for old, new in replacements:
+            print(f"  {old} → {new}")
+
+    # Discover sessions so we can rewrite satellite files
+    session_ids = discover_session_ids(old_meta)
+    session_files = discover_session_files(
+        claude_dir, old_meta, session_ids, include_debug=True,
+    )
+
+    if args.verbose:
+        print(f"Sessions:     {len(session_ids)}")
+
+    # Rewrite all text files under the project metadata dir
+    rewritten = 0
+    for category, paths in session_files.items():
+        for fp in paths:
+            if is_text_file(fp):
+                if _rewrite_file_in_place(fp, replacements):
+                    rewritten += 1
+
+    # Rename the project metadata directory
+    shutil.move(str(old_meta), str(new_meta))
+
+    total_files = sum(len(v) for v in session_files.values())
+    print(f"Renamed {old_dir} → {new_dir}")
+    print(f"  Sessions:        {len(session_ids)}")
+    print(f"  Files processed: {total_files}")
+    print(f"  Files rewritten: {rewritten}")
+    print(f"  Metadata moved:  {old_meta.name} → {new_meta.name}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -653,6 +765,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_inspect.add_argument("archive", help="Path to .portage.tar.gz archive")
     p_inspect.add_argument("-v", "--verbose", action="store_true", help="Show individual files")
 
+    # rename
+    p_rename = sub.add_parser("rename", help="Rewrite Claude metadata after moving/renaming a project")
+    p_rename.add_argument("old_path", help="Original project directory path")
+    p_rename.add_argument("new_path", help="New project directory path")
+    p_rename.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+
     return parser
 
 
@@ -668,6 +786,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "pack": cmd_pack,
         "unpack": cmd_unpack,
         "inspect": cmd_inspect,
+        "rename": cmd_rename,
     }
     return commands[args.command](args)
 

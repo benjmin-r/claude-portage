@@ -4,7 +4,7 @@ Portable Claude Code workspace archives.
 
 Claude Code stores per-project session history, file snapshots, and metadata in `~/.claude/` using a path-encoding scheme (e.g., `/Users/alice/src/foo` → `-Users-alice-src-foo`). This data is tightly coupled to absolute paths, making it impossible to move a project to another machine or directory and use `claude --continue` or `claude --resume`.
 
-**claude-portage** bundles a project + its Claude metadata into a portable archive that can be unpacked anywhere with automatic path rewriting.
+**claude-portage** bundles a project + its Claude metadata into a portable archive that can be unpacked anywhere with automatic path rewriting. It also supports in-place renaming when you move a project directory locally.
 
 ## Installation
 
@@ -49,6 +49,17 @@ Then:
 cd /new/path/to/my-project
 claude --resume  # Sessions from the original machine appear
 ```
+
+### Rename a project directory
+
+After moving/renaming a project directory, update Claude's metadata to match:
+
+```bash
+mv ~/src/foo ~/src/bar
+claude-portage rename ~/src/foo ~/src/bar
+```
+
+This rewrites all paths in the session JSONL, subagent logs, todos, etc. and renames the metadata directory in `~/.claude/projects/`. Sessions will work seamlessly with `claude --resume` from the new location.
 
 ## How It Works
 

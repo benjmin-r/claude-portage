@@ -344,5 +344,174 @@ class TestNoProjectFiles(TestCase):
                         break
 
 
+class TestRename(TestCase):
+    """Test the rename command."""
+
+    def test_rename_rewrites_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            old_project = tmpdir / "old-project"
+            old_project.mkdir()
+            old_project_path = str(old_project.resolve())
+            old_encoded = claude_portage.encode_path(old_project_path)
+
+            new_project = tmpdir / "new-project"
+            new_project_path = str(new_project.resolve())
+            new_encoded = claude_portage.encode_path(new_project_path)
+
+            # Create synthetic Claude metadata
+            fake_claude = tmpdir / "claude"
+            old_meta = fake_claude / "projects" / old_encoded
+            old_meta.mkdir(parents=True)
+
+            session_id = "aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"
+
+            # JSONL with path references
+            jsonl_content = json.dumps({
+                "type": "message",
+                "cwd": old_project_path,
+                "sessionId": session_id,
+            }) + "\n"
+            (old_meta / f"{session_id}.jsonl").write_text(jsonl_content)
+
+            # subagents dir
+            sub_dir = old_meta / session_id / "subagents"
+            sub_dir.mkdir(parents=True)
+            (sub_dir / "agent.jsonl").write_text(
+                json.dumps({"cwd": old_project_path}) + "\n"
+            )
+
+            # file-history (content should also be rewritten if text)
+            fh_dir = fake_claude / "file-history" / session_id
+            fh_dir.mkdir(parents=True)
+            (fh_dir / "log.txt").write_text(f"edited {old_project_path}/main.py\n")
+
+            # session-env
+            se_dir = fake_claude / "session-env" / session_id
+            se_dir.mkdir(parents=True)
+            (se_dir / "env.json").write_text(json.dumps({"cwd": old_project_path}) + "\n")
+
+            # todos
+            todos_dir = fake_claude / "todos"
+            todos_dir.mkdir(parents=True)
+            (todos_dir / f"{session_id}-agent-{session_id}.json").write_text(
+                json.dumps({"project": old_project_path}) + "\n"
+            )
+
+            # Mock default_claude_dir
+            original = claude_portage.default_claude_dir
+            claude_portage.default_claude_dir = lambda: fake_claude
+
+            try:
+                import argparse
+                rename_args = argparse.Namespace(
+                    old_path=str(old_project),
+                    new_path=str(new_project),
+                    verbose=False,
+                )
+                rc = claude_portage.cmd_rename(rename_args)
+                self.assertEqual(rc, 0)
+            finally:
+                claude_portage.default_claude_dir = original
+
+            # Old metadata dir should be gone
+            self.assertFalse(old_meta.exists())
+
+            # New metadata dir should exist
+            new_meta = fake_claude / "projects" / new_encoded
+            self.assertTrue(new_meta.is_dir())
+
+            # JSONL should have rewritten paths
+            new_jsonl = new_meta / f"{session_id}.jsonl"
+            content = new_jsonl.read_text()
+            self.assertIn(new_project_path, content)
+            self.assertNotIn(old_project_path, content)
+
+            # Subagent should be rewritten
+            sa_content = (new_meta / session_id / "subagents" / "agent.jsonl").read_text()
+            self.assertIn(new_project_path, sa_content)
+            self.assertNotIn(old_project_path, sa_content)
+
+            # Satellite files should be rewritten
+            fh_content = (fh_dir / "log.txt").read_text()
+            self.assertIn(new_project_path, fh_content)
+            self.assertNotIn(old_project_path, fh_content)
+
+            se_content = (se_dir / "env.json").read_text()
+            self.assertIn(new_project_path, se_content)
+
+            todo_content = (todos_dir / f"{session_id}-agent-{session_id}.json").read_text()
+            self.assertIn(new_project_path, todo_content)
+
+    def test_rename_same_path_errors(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project = Path(tmpdir) / "proj"
+            project.mkdir()
+            resolved = str(project.resolve())
+
+            import argparse
+            args = argparse.Namespace(
+                old_path=resolved,
+                new_path=resolved,
+                verbose=False,
+            )
+            rc = claude_portage.cmd_rename(args)
+            self.assertEqual(rc, 1)
+
+    def test_rename_no_metadata_errors(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            fake_claude = tmpdir / "claude"
+            fake_claude.mkdir()
+
+            original = claude_portage.default_claude_dir
+            claude_portage.default_claude_dir = lambda: fake_claude
+
+            try:
+                import argparse
+                args = argparse.Namespace(
+                    old_path=str(tmpdir / "nonexistent"),
+                    new_path=str(tmpdir / "other"),
+                    verbose=False,
+                )
+                rc = claude_portage.cmd_rename(args)
+                self.assertEqual(rc, 1)
+            finally:
+                claude_portage.default_claude_dir = original
+
+    def test_rename_target_exists_errors(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+
+            old_project = tmpdir / "old"
+            old_project.mkdir()
+            new_project = tmpdir / "new"
+            new_project.mkdir()
+
+            fake_claude = tmpdir / "claude"
+            old_encoded = claude_portage.encode_path(str(old_project.resolve()))
+            new_encoded = claude_portage.encode_path(str(new_project.resolve()))
+
+            # Create metadata for both
+            (fake_claude / "projects" / old_encoded).mkdir(parents=True)
+            (fake_claude / "projects" / new_encoded).mkdir(parents=True)
+
+            original = claude_portage.default_claude_dir
+            claude_portage.default_claude_dir = lambda: fake_claude
+
+            try:
+                import argparse
+                args = argparse.Namespace(
+                    old_path=str(old_project),
+                    new_path=str(new_project),
+                    verbose=False,
+                )
+                rc = claude_portage.cmd_rename(args)
+                self.assertEqual(rc, 1)
+            finally:
+                claude_portage.default_claude_dir = original
+
+
 if __name__ == "__main__":
     main()
