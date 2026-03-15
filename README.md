@@ -72,6 +72,36 @@ This rewrites all paths in the session JSONL, subagent logs, todos, etc. and ren
 3. **Unpack** extracts project files and places Claude metadata into `~/.claude/` on the target machine, performing line-by-line string replacement of all source paths with target paths.
 4. Path rewriting handles the project path, the Claude config directory path, and the encoded directory name, applied longest-first to avoid partial matches.
 
+## How This Was Built
+
+This entire tool was built with Claude Code in 30 minutes — from `git init` (19:23) to v0.2.0 on PyPI (19:53). Here are the actual prompts used, in order:
+
+**Prompt 1** — the idea (entered via `/feature-forge`, which generated the implementation plan):
+
+> I want to create a tool that lets you run a command that takes a directory in which the user has been working with claude code. The tool takes that directory as well as any/all relevant metadata in ~/.claude to that directory, and bundles it up into an archive file that can be copied to another computer say (or the same computer at a different path). The tool then allows for unarchiving the data where the user wants it, and it hydrates the ~/.claude metadata correctly so that the user could do claude --continue or claude --resume and see the same thing they would see in the original location. When we're done we will open source it in my github account with MIT license.
+
+**Prompt 2** — implement the plan (the plan from prompt 1 was fed back in — ~5400 chars of architecture, archive layout, CLI interface, and implementation steps):
+
+> Implement the following plan: \<the generated plan>
+
+**Prompt 3** — ship it:
+
+> Ok, let's create the github repo, push to github, and get deployed to pip.
+
+**Prompt 4** — add a feature:
+
+> Let's add a feature to claude-portage for renaming a directory. Like I have ~/src/foo that I've been working with claude code in, and I want to rename it to ~/src/bar
+
+**Prompt 5** — ship it again:
+
+> yes
+
+**Prompt 6** — Homebrew:
+
+> How can we get this into homebrew?
+
+That's it. Six prompts. The rest was Claude Code autonomously writing code, running tests, creating the GitHub repo, publishing to PyPI, and setting up the Homebrew tap.
+
 ## Known Limitations
 
 - Path rewriting is string-based, not JSON-aware. This works because paths appear in many contexts (command strings, tool outputs, file paths) where structured rewriting would miss them.
