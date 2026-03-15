@@ -2,3 +2,14 @@
 # Dolt database files (added by bd init)
 .dolt/
 *.db
+
+# Python
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+.tox/
+.venv/
+
+# Portage archives
+*.portage.tar.gz
