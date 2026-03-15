@@ -121,6 +121,12 @@ class TestPackUnpackRoundtrip(TestCase):
                 "cwd": src_project_path,
                 "sessionId": session_id,
                 "data": {"text": f"Working in {src_project_path}"},
+            }) + "\n" + json.dumps({
+                "type": "user",
+                "cwd": src_project_path,
+                "sessionId": session_id,
+                "timestamp": "2026-03-10T12:00:00.000Z",
+                "message": [{"type": "text", "text": "Hello from test"}],
             }) + "\n"
             (src_project_meta / f"{session_id}.jsonl").write_text(jsonl_content)
 
@@ -235,6 +241,17 @@ class TestPackUnpackRoundtrip(TestCase):
             dst_todo = dst_claude / "todos" / f"{session_id}-agent-{session_id}.json"
             self.assertTrue(dst_todo.exists())
             self.assertIn(str(dst_project), dst_todo.read_text())
+
+            # history.jsonl created with session entry
+            history_path = dst_claude / "history.jsonl"
+            self.assertTrue(history_path.exists())
+            history_lines = history_path.read_text().strip().split("\n")
+            self.assertEqual(len(history_lines), 1)
+            entry = json.loads(history_lines[0])
+            self.assertEqual(entry["sessionId"], session_id)
+            self.assertEqual(entry["project"], str(dst_project.resolve()))
+            self.assertEqual(entry["display"], "Hello from test")
+            self.assertGreater(entry["timestamp"], 0)
 
 
 class TestInspect(TestCase):

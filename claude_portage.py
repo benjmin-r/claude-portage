@@ -19,7 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 # ---------------------------------------------------------------------------
 # Path encoding / decoding
@@ -517,12 +517,120 @@ def cmd_unpack(args: argparse.Namespace) -> int:
 
                     meta_count += 1
 
+    # Register sessions in history.jsonl so claude --continue/--resume can find them
+    session_ids = manifest.get("session_ids", [])
+    history_count = _register_sessions_in_history(
+        claude_dir, target_encoded, target_project_path, session_ids, args.verbose,
+    )
+
     print(f"Unpacked to {target_dir}")
     print(f"  Project files:  {file_count}")
     print(f"  Metadata files: {meta_count}")
     print(f"  Files rewritten: {rewritten_count}")
+    print(f"  History entries: {history_count}")
     print(f"  Claude dir:     {claude_dir}")
     return 0
+
+
+def _register_sessions_in_history(
+    claude_dir: Path,
+    target_encoded: str,
+    target_project_path: str,
+    session_ids: List[str],
+    verbose: bool,
+) -> int:
+    """Append entries to ~/.claude/history.jsonl for migrated sessions.
+
+    Claude Code uses history.jsonl to index sessions for --continue/--resume.
+    Without entries here, migrated sessions are invisible to those commands.
+    """
+    if not session_ids:
+        return 0
+
+    history_path = claude_dir / "history.jsonl"
+    project_dir = claude_dir / "projects" / target_encoded
+
+    # Read existing history to avoid duplicates
+    existing_sessions: set = set()
+    if history_path.is_file():
+        try:
+            with open(history_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        existing_sessions.add(entry.get("sessionId", ""))
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+        except OSError:
+            pass
+
+    entries = []
+    for sid in session_ids:
+        if sid in existing_sessions:
+            continue
+        session_file = project_dir / f"{sid}.jsonl"
+        if not session_file.is_file():
+            continue
+
+        # Find the first user message to get timestamp and display text
+        display = "(migrated session)"
+        timestamp_ms = 0
+        try:
+            with open(session_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if record.get("type") != "user":
+                        continue
+                    # Extract timestamp (ISO → epoch ms)
+                    ts = record.get("timestamp", "")
+                    if ts:
+                        try:
+                            from datetime import datetime, timezone
+                            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            timestamp_ms = int(dt.timestamp() * 1000)
+                        except (ValueError, OSError):
+                            pass
+                    # Extract display text from message
+                    msg = record.get("message")
+                    if isinstance(msg, list):
+                        for block in msg:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                display = block["text"][:100]
+                                break
+                    elif isinstance(msg, str):
+                        display = msg[:100]
+                    break
+        except OSError:
+            continue
+
+        entries.append(json.dumps({
+            "display": display,
+            "pastedContents": {},
+            "timestamp": timestamp_ms,
+            "project": target_project_path,
+            "sessionId": sid,
+        }, ensure_ascii=False))
+
+    if entries:
+        try:
+            with open(history_path, "a", encoding="utf-8") as f:
+                for entry in entries:
+                    f.write(entry + "\n")
+            if verbose:
+                print(f"Added {len(entries)} entries to {history_path}")
+        except OSError as e:
+            print(f"Warning: could not update history: {e}", file=sys.stderr)
+
+    return len(entries)
 
 
 def _copy_with_rewrite(
