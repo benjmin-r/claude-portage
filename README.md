@@ -67,10 +67,49 @@ This rewrites all paths in the session JSONL, subagent logs, todos, etc. and ren
 
 ## How It Works
 
-1. **Pack** discovers all Claude metadata for a project: session JSONL files, subagent logs, tool results, file-history snapshots, session environments, todos, plans, and memory.
-2. The archive includes a `manifest.json` recording the source absolute paths.
-3. **Unpack** extracts project files and places Claude metadata into `~/.claude/` on the target machine, performing line-by-line string replacement of all source paths with target paths.
-4. Path rewriting handles the project path, the Claude config directory path, and the encoded directory name, applied longest-first to avoid partial matches.
+The core idea fits in ~20 lines of Python:
+
+```python
+import json, os, shutil, tarfile, tempfile
+from pathlib import Path
+
+def encode(p): return os.path.realpath(str(p)).replace("/", "-").replace(".", "-")
+
+def pack(project, claude=Path.home()/".claude", out=None):
+    meta = claude/"projects"/encode(project)
+    out = out or Path(f"{project.name}.portage.tar.gz")
+    manifest = {"source": str(project), "claude": str(claude), "encoded": encode(project)}
+    with tarfile.open(str(out), "w:gz") as t:
+        t.add(str(project), "pkg/project"); t.add(str(meta), "pkg/meta")
+        info = tarfile.TarInfo("pkg/manifest.json"); data = json.dumps(manifest).encode()
+        info.size = len(data); t.addfile(info, __import__("io").BytesIO(data))
+
+def unpack(archive, target, claude=Path.home()/".claude"):
+    with tempfile.TemporaryDirectory() as tmp:
+        with tarfile.open(str(archive)) as t: t.extractall(tmp)
+        m = json.loads((Path(tmp)/"pkg/manifest.json").read_text())
+        reps = [(m["source"], str(target)), (m["encoded"], encode(target)),
+                (m["claude"], str(claude))]
+        shutil.copytree(f"{tmp}/pkg/project", str(target), dirs_exist_ok=True)
+        dst = claude/"projects"/encode(target)
+        shutil.copytree(f"{tmp}/pkg/meta", str(dst), dirs_exist_ok=True)
+        for f in dst.rglob("*"):
+            if f.is_file():
+                try:
+                    txt = f.read_text()
+                    for old, new in reps: txt = txt.replace(old, new)
+                    f.write_text(txt)
+                except UnicodeDecodeError: pass
+```
+
+That's the whole idea: tar up a project and its `~/.claude/projects/<encoded>/` metadata, then string-replace old paths with new paths on unpack.
+
+The actual tool is ~700 lines. Here's what the other ~670 lines handle:
+
+- **Correctness**: Replacement pairs are sorted longest-first so `/Users/alice/src/foo` is replaced before `/Users/alice`. macOS symlinks (`/var` → `/private/var`) generate extra replacement pairs. Encoded directory names in file paths are rewritten during copy, not just inside file contents.
+- **Completeness**: Claude scatters session data across 6+ directories — `projects/<encoded>/`, `file-history/<session>/`, `session-env/<session>/`, `todos/`, `plans/`, and `debug/`. The tool discovers all of them, plus subagent logs and tool results nested under each session. After unpack, sessions are registered in `~/.claude/history.jsonl` so `claude --resume` can find them.
+- **Usability**: An argparse CLI with `pack`, `unpack`, `inspect`, and `rename` subcommands. Verbose mode. `--no-project-files` for metadata-only archives. `--include-debug` for debug logs. Git-aware file collection that respects `.gitignore`. Human-readable archive inspection. In-place rename for when you just move a directory locally.
+- **Robustness**: Binary files are detected (null-byte heuristic + known-suffix allowlist) and copied without rewriting. File timestamps are preserved through rewriting. `tar.extractall` uses `data_filter` when available (Python 3.12+). Graceful error messages for missing projects, missing metadata, and conflicting targets.
 
 ## How This Was Built
 
