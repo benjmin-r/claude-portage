@@ -28,9 +28,10 @@ class TestEncodePath(TestCase):
         self.assertEqual(encoded, "-private-tmp-eric-bowman-src-foo")
 
     def test_no_trailing_slash(self):
-        a = claude_portage.encode_path("/tmp/test")
-        b = claude_portage.encode_path("/tmp/test/")
-        self.assertEqual(a, b)
+        # Both must resolve to the same hardcoded value, not just match each other
+        expected = "-private-tmp-test"
+        self.assertEqual(claude_portage.encode_path("/tmp/test"), expected)
+        self.assertEqual(claude_portage.encode_path("/tmp/test/"), expected)
 
     def test_known_real_paths(self):
         # Validate against actual Claude-generated encoded paths
