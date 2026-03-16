@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-__version__ = "0.2.4"
+__version__ = "0.2.5"
 
 _TEXT_SUFFIXES = frozenset({
     ".json", ".jsonl", ".txt", ".md", ".yaml", ".yml",
